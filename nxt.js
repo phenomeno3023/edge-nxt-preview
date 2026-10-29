@@ -1,4 +1,5 @@
 import { readNewsSnapshot } from "./news-feed.js";
+import { hasIssuerEvidence } from "./news-matching.mjs";
 (() => {
   const $ = (selector) => document.querySelector(selector);
   const panel = $("#nxt-panel");
@@ -111,10 +112,11 @@ import { readNewsSnapshot } from "./news-feed.js";
     return items.filter((item) => {
       const listed = [item?.ticker, ...(Array.isArray(item?.tickers) ? item.tickers : []), ...(Array.isArray(item?.related_tickers) ? item.related_tickers : [])]
         .map((value) => String(value ?? "").trim()).filter(validTicker);
-      if (listed.length) return listed.includes(ticker);
-      const articleCompany = String(item?.company || "").normalize("NFKC").toLocaleLowerCase("ko-KR").replace(/[\s\p{P}\p{S}]/gu, "");
-      const officialCompany = String(officialName || "").normalize("NFKC").toLocaleLowerCase("ko-KR").replace(/[\s\p{P}\p{S}]/gu, "");
-      return Boolean(articleCompany && officialCompany && articleCompany === officialCompany);
+      const candidateCompany = officialName || item?.company || item?.ticker_name || item?.company_name || "";
+      if (listed.length && !listed.includes(ticker)) return false;
+      // A ticker field alone is not enough: the public feed can contain a bad
+      // source-side code match. Require the company name or exact code in text.
+      return hasIssuerEvidence(item, ticker, candidateCompany);
     });
   }
 
