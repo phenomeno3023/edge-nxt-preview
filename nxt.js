@@ -1,3 +1,4 @@
+import { readNewsSnapshot } from "./news-feed.js";
 (() => {
   const $ = (selector) => document.querySelector(selector);
   const panel = $("#nxt-panel");
@@ -66,6 +67,10 @@
     };
   };
   const safeLink = (value) => /^https?:\/\//i.test(String(value ?? "")) ? String(value) : null;
+  const parseLinks = (value) => {
+    if (Array.isArray(value)) return value;
+    try { const parsed = JSON.parse(value || "[]"); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  };
   const isOfficialDisclosureLink = (value) => {
     try { const host = new URL(value).hostname.toLowerCase(); return host === "kind.krx.co.kr" || host.endsWith(".kind.krx.co.kr") || host === "dart.fss.or.kr" || host.endsWith(".dart.fss.or.kr"); } catch { return false; }
   };
@@ -171,14 +176,19 @@
         const url = /^https?:\/\//i.test(news.url || "") ? news.url : "#";
         const publishedAt = news.publishedAt ?? news.published_at;
         const firstSeenAt = news.firstSeenAt ?? news.first_seen_at;
-        const disclosure = news.isDisclosure ?? news.is_disclosure;
-        const analysis = news.analysis || {};
+        const disclosure = news.isDisclosure === true || news.isDisclosure === 1 || news.isDisclosure === "1" || news.is_disclosure === true || news.is_disclosure === 1 || news.is_disclosure === "1";
+        const analysis = news.analysis || localAnalysis(news);
         const types = analysis.types || news.catalystTypes || [];
         const risks = [news.risksText || news.risks, ...(analysis.risks || []).map((risk) => risk.detail || risk.code)].filter(Boolean).join(" · ");
         const freshness = ({ TODAY: "당일", PREVIOUS_DAY: "전일", HISTORICAL: "과거", PUBLISHED_AT_UNKNOWN: "게시 시각 미확인" })[analysis.freshness] || "게시 시각 확인 필요";
         const evidence = analysis.gradeBasis || news.catalystGradeBasis;
-        const disclosureUrl = /^https?:\/\//i.test(news.disclosureUrl || "") && news.disclosureUrl !== news.url ? `<a href="${escapeHtml(news.disclosureUrl)}" target="_blank" rel="noopener">공시 원문 ↗</a>` : "";
-        return `<li><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(news.title || "제목 미확인")}</a>${disclosureUrl}<small>게시 ${escapeHtml(dateText(publishedAt))} · 최초 수집 ${escapeHtml(dateText(firstSeenAt))} · ${escapeHtml(collectionDelayText(publishedAt, firstSeenAt))} · ${freshness}${disclosure ? " · 공시" : ""}</small><span>${escapeHtml(analysis.grade || news.grade || "등급 미확인")}급 · ${escapeHtml(types.join("·") || news.category || "분류 미확인")}${evidence ? ` · 근거: ${escapeHtml(evidence)}` : ""}${risks ? ` · 위험: ${escapeHtml(risks)}` : ""}</span></li>`;
+        const disclosureLink = safeLink(news.disclosureUrl ?? news.disclosure_url) || (disclosure && isOfficialDisclosureLink(url) ? url : null);
+        const disclosureUrl = disclosureLink && disclosureLink !== url ? `<a href="${escapeHtml(disclosureLink)}" target="_blank" rel="noopener">공시 원문 ↗</a>` : "";
+        const sourceLinks = [...new Map(parseLinks(news.sourceLinks ?? news.source_links).filter((source) => safeLink(source?.url) && source.url !== url && source.url !== disclosureLink).map((source) => [source.url, source])).values()];
+        const otherLinks = sourceLinks.map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${isOfficialDisclosureLink(source.url) ? "공시 원문" : "다른 보도 원문"} ↗</a>`).join(" ");
+        let publisher = String(news.publisher || "").trim();
+        if (!publisher) { try { publisher = new URL(url).hostname; } catch { publisher = "언론사 미확인"; } }
+        return `<li><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(news.title || "제목 미확인")}</a>${disclosureUrl}${otherLinks ? `<span class="nxt-source-links">${otherLinks}</span>` : ""}<small>${escapeHtml(publisher)} · 게시 ${escapeHtml(dateText(publishedAt))} · 최초 수집 ${escapeHtml(dateText(firstSeenAt))} · ${escapeHtml(collectionDelayText(publishedAt, firstSeenAt))} · ${freshness}${disclosure ? " · 공시" : ""}</small><span>${escapeHtml(analysis.grade || news.grade || "등급 미확인")}급 · ${escapeHtml(types.join("·") || news.category || "분류 미확인")}${evidence ? ` · 근거: ${escapeHtml(evidence)}` : ""}${risks ? ` · 위험: ${escapeHtml(risks)}` : ""}</span></li>`;
       }).join("") : "<li class=\"nxt-no-news\">종목코드 일치 뉴스·공시 없음 · 상승 원인 미확인</li>";
       const catalystTypes = item.catalystTypes || [];
       const catalyst = item.catalystSummary ? `<b>대표 호재 후보</b> ${escapeHtml(item.catalystSummary)} · ${escapeHtml(catalystTypes.join("·") || "유형 미확인")}` : "관련 뉴스·공시가 가격 상승의 원인인지 확인되지 않았습니다.";
@@ -259,7 +269,7 @@
     const quote = hasVerifiedQuote
       ? `<p class="nxt-detail-quote">${escapeHtml(statusLabel[quoteStatus])} · 순위 ${escapeHtml(marketItem.rank ?? "미제공")} · 현재가 ${escapeHtml(numberText(marketItem.price, "원"))} · 등락률 ${escapeHtml(numberText(marketItem.changePercent, "%"))} · 거래량 ${escapeHtml(numberText(marketItem.volume))} · 거래대금 ${escapeHtml(numberText(marketItem.turnover, "원"))} · 기준 시각 ${escapeHtml(dateText(marketItem.eventAt || marketItem.asOf))}</p>`
       : '<p class="nxt-detail-quote">NXT 시세 연결 대기 · 순위, 현재가, 등락률, 거래량, 거래대금: 확인 불가</p>';
-    target.innerHTML = `<header class="nxt-detail-head"><div><h3>${escapeHtml(result.company || "종목명 확인 불가")} <small>${escapeHtml(ticker)}</small></h3><p>종목명 출처: ${escapeHtml(companyStatus)} · 뉴스 ${articles.length}건 · 공시 ${disclosures.length}건</p></div><span data-state="${escapeHtml(result.feedStatus || result.status)}">${escapeHtml(feedLabel)}</span></header>${quote}<p class="nxt-detail-meta">피드 시각 ${escapeHtml(dateText(result.feedServerTime))} · 최근 수집 ${escapeHtml(dateText(result.feedLatestRunAt))} · 데이터 최신성과 개별 게시 시각은 별도 기준입니다.</p>${result.status === "UNAVAILABLE" ? '<div class="nxt-empty">피드 오류로 인해 뉴스가 없는 상태와 구분했습니다.</div>' : ""}${items.length ? `<section><h4>관련 사건 (${items.length}건 · 중복 출처 통합)</h4>${items.map(renderItem).join("")}</section>` : result.status === "EMPTY" ? '<div class="nxt-empty">피드 확인 완료 · 해당 종목의 일치 뉴스·공시 0건</div>' : ""}`;
+    target.innerHTML = `<header class="nxt-detail-head"><div><h3>${escapeHtml(result.company || "종목명 확인 불가")} <small>${escapeHtml(ticker)}</small></h3><p>종목명 출처: ${escapeHtml(companyStatus)} · 뉴스 ${articles.length}건 · 공시 ${disclosures.length}건</p></div><span data-state="${escapeHtml(result.feedStatus || result.status)}">${escapeHtml(feedLabel)}</span></header>${quote}<p class="nxt-detail-meta">피드 시각 ${escapeHtml(dateText(result.feedServerTime))} · 최근 수집 ${escapeHtml(dateText(result.feedLatestRunAt))} · collectionHealth ${escapeHtml(result.collectionHealthState || "미제공 · UNVERIFIED")} · 데이터 최신성과 개별 게시 시각은 별도 기준입니다.</p>${result.status === "UNAVAILABLE" ? '<div class="nxt-empty">피드 오류로 인해 뉴스가 없는 상태와 구분했습니다.</div>' : ""}${items.length ? `<section><h4>관련 사건 (${items.length}건 · 중복 출처 통합)</h4>${items.map(renderItem).join("")}</section>` : result.status === "EMPTY" ? '<div class="nxt-empty">피드 확인 완료 · 해당 종목의 일치 뉴스·공시 0건</div>' : ""}`;
   }
 
   async function loadDetail(value) {
@@ -278,16 +288,17 @@
     } catch { /* Static Pages has no backend route; use its read-only JSON feed. */ }
     if (!result) {
       try {
-        const response = await fetch(new URL("./data/news.json", location.href), { cache: "no-store" });
-        if (!response.ok) throw new Error(`news.json HTTP ${response.status}`);
-        const feed = await response.json();
+        const snapshot = await readNewsSnapshot();
+        if (snapshot.status !== "OK") throw new Error(snapshot.error || "NEWS_FEED_UNAVAILABLE");
+        const feed = snapshot.feed;
         const matches = dedupeLocalItems(newsFor(Array.isArray(feed?.items) ? feed.items : [], ticker));
         const names = [...new Set(matches.map((item) => item.company).filter(Boolean))];
         result = {
           schemaVersion: 1, ticker, company: names.length === 1 ? names[0] : null,
           companySource: names.length === 1 ? "NEWS_FEED_TICKER_PAIR" : "UNVERIFIED",
-          status: matches.length ? "OK" : "EMPTY", feedStatus: !feed?.serverTime || !Number.isFinite(Date.parse(feed.serverTime)) ? "UNVERIFIED" : Date.now() - Date.parse(feed.serverTime) > 65 * 60_000 ? "STALE" : "OK",
-          feedServerTime: feed?.serverTime ?? null, feedLatestRunAt: feed?.latestRun?.finished_at ?? null,
+          status: matches.length ? "OK" : "EMPTY", feedStatus: snapshot.feedStatus,
+          feedServerTime: snapshot.serverTime, feedLatestRunAt: snapshot.lastCollectionAt,
+          collectionHealthState: snapshot.collectionHealthState, statusFileState: snapshot.statusFileState,
           items: matches.map((item) => ({
             ...item, publishedAt: item.published_at ?? null, firstSeenAt: item.first_seen_at ?? null,
             isDisclosure: item.isDisclosure ?? (item.is_disclosure === true || item.is_disclosure === 1 || item.is_disclosure === "1"),
@@ -347,11 +358,11 @@
       return;
     }
     try {
-      const response = await fetch(new URL("./data/news.json", location.href), { cache: "no-store" });
-      if (response.ok) {
-        const feed = await response.json();
+      const snapshot = await readNewsSnapshot();
+      if (snapshot.status === "OK") {
+        const feed = snapshot.feed;
         newsItems = Array.isArray(feed?.items) ? feed.items : [];
-        if (!newsSource) newsSource = { status: newsItems.length ? "OK" : "EMPTY", generatedAt: feed.serverTime || null, lastCollectionAt: feed.latestRun?.finished_at || null };
+        if (!newsSource) newsSource = { status: snapshot.feedStatus, generatedAt: snapshot.serverTime, lastCollectionAt: snapshot.lastCollectionAt, collectionHealthState: snapshot.collectionHealthState };
       }
     } catch { /* Existing news panel reports its own feed error. */ }
     render(root, newsItems, newsSource);
